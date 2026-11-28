@@ -65,15 +65,24 @@ export async function findActiveApprovalWindow(params: {
     ...params,
     requesterIp: params.requesterIp ?? "",
   });
+  const now = nowIso();
   const database = await db();
   const row = (await database
     .query(
-      "SELECT id, grant_id, expires_at, scope FROM approval_windows WHERE user_id = ? AND api_key_id = ? AND expires_at > ? AND ((scope = 'endpoint' AND requester_ip = ? AND method = ? AND upstream_host = ? AND upstream_path = ?) OR (scope = 'provider' AND provider_id = ?)) ORDER BY expires_at DESC LIMIT 1;"
+      // Only windows whose grant can still unlock a credential count: a
+      // reconnect deletes the replaced credential's grants and a disconnect
+      // revokes the account, and auto-approving against either would only
+      // fail at execute (NO_GRANT) until the window expired.
+      "SELECT w.id, w.grant_id, w.expires_at, w.scope FROM approval_windows w " +
+        "JOIN credential_grants g ON g.id = w.grant_id AND g.user_id = w.user_id AND g.expires_at > ? " +
+        "JOIN linked_accounts a ON a.id = g.linked_account_id AND a.status = 'active' " +
+        "WHERE w.user_id = ? AND w.api_key_id = ? AND w.expires_at > ? AND ((w.scope = 'endpoint' AND w.requester_ip = ? AND w.method = ? AND w.upstream_host = ? AND w.upstream_path = ?) OR (w.scope = 'provider' AND w.provider_id = ?)) ORDER BY w.expires_at DESC LIMIT 1;"
     )
     .get(
+      now,
       params.userId,
       k.apiKeyId,
-      nowIso(),
+      now,
       params.requesterIp,
       k.method,
       k.upstreamHost,

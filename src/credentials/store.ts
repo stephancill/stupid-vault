@@ -205,7 +205,13 @@ export async function saveLinkedCredential(params: {
         metadataJson,
         existing.id
       );
-    // Outstanding grants hold DEKs for the replaced credential.
+    // Outstanding grants hold DEKs for the replaced credential; approval
+    // windows built on them can no longer unlock anything.
+    await database
+      .query(
+        "DELETE FROM approval_windows WHERE grant_id IN (SELECT id FROM credential_grants WHERE linked_account_id = ?);"
+      )
+      .run(existing.id);
     await database
       .query("DELETE FROM credential_grants WHERE linked_account_id = ?;")
       .run(existing.id);
@@ -546,6 +552,8 @@ export async function sweepCredentialGrants(): Promise<void> {
     .query("DELETE FROM webauthn_challenges WHERE expires_at < ?;")
     .run(now);
   await database
-    .query("DELETE FROM approval_windows WHERE expires_at < ?;")
+    .query(
+      "DELETE FROM approval_windows WHERE expires_at < ? OR grant_id IS NULL OR grant_id NOT IN (SELECT id FROM credential_grants);"
+    )
     .run(now);
 }

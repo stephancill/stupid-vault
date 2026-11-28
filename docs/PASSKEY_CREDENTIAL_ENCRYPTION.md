@@ -202,6 +202,15 @@ requester IP comes from `X-Forwarded-For`, which the client can influence.
 The scope is part of the signed approval options, so the passkey assertion commits
 to it. Only offered when the request maps to a provider.
 
+A window only auto-approves while its grant can still unlock a credential: the
+lookup joins `credential_grants` (unexpired) and `linked_accounts` (`active`).
+Reconnecting a provider replaces the credential and deletes its grants (and the
+windows built on them); disconnecting revokes the account. Before this check, a
+window outlived its grant and auto-approved every matching request into a
+`NO_GRANT` execute failure until it expired, with no way to get a fresh passkey
+approval. Such requests now fall back to a normal approval. The sweeper also
+deletes windows whose grant is missing.
+
 ## Schema (`0011_passkey_credentials.sql`)
 
 - `user_passkeys` (one row per user), `user_keys`.

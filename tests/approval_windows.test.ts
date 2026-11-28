@@ -2,6 +2,7 @@ import { expect, test } from "bun:test";
 import { Hono } from "hono";
 import { ulid } from "ulid";
 
+import { sweepCredentialGrants } from "../src/credentials/store";
 import { sha256Hex } from "../src/crypto/sha256";
 import { db } from "../src/db/client";
 import { migrate } from "../src/db/migrate";
@@ -21,6 +22,7 @@ async function setupDb() {
   const database = await db();
   await database.exec("DELETE FROM proxy_requests;");
   await database.exec("DELETE FROM approval_windows;");
+  await database.exec("DELETE FROM credential_grants;");
   await database.exec("DELETE FROM linked_accounts;");
   await database.exec("DELETE FROM api_keys;");
   await database.exec("DELETE FROM users;");
@@ -52,6 +54,44 @@ async function insertApiKey(params: {
     )
     .run(apiKeyId, params.userId, params.label, keyHash, now, now);
   return { apiKeyId, keyHash };
+}
+
+// A window grant backed by an active linked account, like the approval page
+// creates.
+async function insertGrant(params: {
+  userId: string;
+  provider: string;
+  grantId: string;
+}): Promise<{ linkedAccountId: string }> {
+  const linkedAccountId = ulid();
+  const database = await db();
+  await database
+    .query(
+      "INSERT INTO linked_accounts (id, user_id, provider, provider_user_id, scopes, refresh_token_ciphertext, status, created_at, revoked_at) VALUES (?, ?, ?, ?, ?, ?, 'active', ?, NULL);"
+    )
+    .run(
+      linkedAccountId,
+      params.userId,
+      params.provider,
+      `${params.provider}-user`,
+      "read",
+      new Uint8Array([1]),
+      nowIso()
+    );
+  await database
+    .query(
+      "INSERT INTO credential_grants (id, user_id, linked_account_id, target_kind, target_id, dek_ciphertext, created_at, expires_at) VALUES (?, ?, ?, 'window', ?, ?, ?, ?);"
+    )
+    .run(
+      params.grantId,
+      params.userId,
+      linkedAccountId,
+      ulid(),
+      new Uint8Array([1]),
+      nowIso(),
+      new Date(Date.now() + 15 * 60_000).toISOString()
+    );
+  return { linkedAccountId };
 }
 
 function app() {
@@ -95,6 +135,8 @@ test("approval window: /request auto-approves matching endpoints", async () => {
     label: "keyA",
     keyPlain: "pb_test_key_a",
   });
+
+  await insertGrant({ userId, provider: "github", grantId: "grant_test" });
 
   // Window for GET api.github.com/user, scoped to key/IP.
   const { windowId } = await createApprovalWindow({
@@ -163,6 +205,7 @@ test("approval window: provider scope auto-approves any endpoint for that provid
     keyPlain: "pb_test_key_a",
   });
 
+  await insertGrant({ userId, provider: "github", grantId: "grant_provider" });
   await createApprovalWindow({
     userId,
     apiKeyId: keyA.apiKeyId,
@@ -212,6 +255,11 @@ test("approval window: provider scope is not tied to the requester IP", async ()
     keyPlain: "pb_test_key_a",
   });
   await insertApiKey({ userId, label: "keyB", keyPlain: "pb_test_key_b" });
+  await insertGrant({
+    userId,
+    provider: "cloudflare",
+    grantId: "grant_provider",
+  });
 
   await createApprovalWindow({
     userId,
@@ -265,6 +313,7 @@ test("approval window: endpoint scope stays tied to the requester IP", async () 
     label: "keyA",
     keyPlain: "pb_test_key_a",
   });
+  await insertGrant({ userId, provider: "github", grantId: "grant_test" });
 
   await createApprovalWindow({
     userId,
@@ -338,4 +387,78 @@ test("approval window: provider scope requires a provider id", async () => {
       expiresAt: new Date(Date.now() + 15 * 60_000).toISOString(),
     })
   ).rejects.toThrow();
+});
+
+async function setupProviderWindow(): Promise<{
+  userId: string;
+  linkedAccountId: string;
+}> {
+  await setupDb();
+  const userId = await insertUser();
+  const keyA = await insertApiKey({
+    userId,
+    label: "keyA",
+    keyPlain: "pb_test_key_a",
+  });
+  const { linkedAccountId } = await insertGrant({
+    userId,
+    provider: "github",
+    grantId: "grant_window",
+  });
+  await createApprovalWindow({
+    userId,
+    apiKeyId: keyA.apiKeyId,
+    requesterIp: "203.0.113.10",
+    method: "GET",
+    url: new URL("https://api.github.com/user"),
+    scope: "provider",
+    providerId: "github",
+    grantId: "grant_window",
+    expiresAt: new Date(Date.now() + 15 * 60_000).toISOString(),
+  });
+  return { userId, linkedAccountId };
+}
+
+test("approval window: a deleted grant (reconnected account) stops auto-approval", async () => {
+  await setupProviderWindow();
+  const database = await db();
+  // What a reconnect does to the replaced credential's grants.
+  await database.exec("DELETE FROM credential_grants;");
+
+  const res = await requestGithubUser("203.0.113.10");
+  expect(((await res.json()) as JsonRecord).status).toBe("PENDING_APPROVAL");
+});
+
+test("approval window: a revoked account stops auto-approval", async () => {
+  const { linkedAccountId } = await setupProviderWindow();
+  const database = await db();
+  await database
+    .query("UPDATE linked_accounts SET status = 'revoked' WHERE id = ?;")
+    .run(linkedAccountId);
+
+  const res = await requestGithubUser("203.0.113.10");
+  expect(((await res.json()) as JsonRecord).status).toBe("PENDING_APPROVAL");
+});
+
+test("approval window: an expired grant stops auto-approval", async () => {
+  await setupProviderWindow();
+  const database = await db();
+  await database
+    .query("UPDATE credential_grants SET expires_at = ?;")
+    .run(new Date(Date.now() - 1000).toISOString());
+
+  const res = await requestGithubUser("203.0.113.10");
+  expect(((await res.json()) as JsonRecord).status).toBe("PENDING_APPROVAL");
+});
+
+test("approval window: sweeper removes windows whose grant is gone", async () => {
+  await setupProviderWindow();
+  const database = await db();
+  await database.exec("DELETE FROM credential_grants;");
+  await sweepCredentialGrants();
+
+  const row = (await database
+    .query("SELECT COUNT(*) AS n FROM approval_windows;")
+    .get()) as { n: number };
+  expect(row.n).toBe(0);
 });
