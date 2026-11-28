@@ -55,3 +55,33 @@ describe("interpretProxyRequest", () => {
     expect(out.details.join("\n")).toContain("script: my-worker");
   });
 });
+
+describe("interpretProxyRequest: Google Docs edits", () => {
+  test("interprets Docs documents.batchUpdate", () => {
+    const out = interpretProxyRequest({
+      url: new URL(
+        "https://docs.googleapis.com/v1/documents/doc123:batchUpdate"
+      ),
+      method: "POST",
+      bodyJson: {
+        requests: [
+          { replaceAllText: { containsText: { text: "a" }, replaceText: "b" } },
+          { replaceAllText: { containsText: { text: "c" }, replaceText: "d" } },
+        ],
+      },
+    });
+    expect(out.summary).toBe("Edit Google Doc");
+    expect(out.details.join("\n")).toContain("documentId: doc123");
+    expect(out.details.join("\n")).toContain("2 edits: replaceAllText");
+  });
+
+  test("never labels an edit as a read", () => {
+    const out = interpretProxyRequest({
+      url: new URL(
+        "https://docs.googleapis.com/v1/documents/doc123:batchUpdate"
+      ),
+      method: "POST",
+    });
+    expect(out.summary).not.toBe("Read Google Doc");
+  });
+});

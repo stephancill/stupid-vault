@@ -18,7 +18,8 @@ export function googleProvider(): OAuthProviderConfig {
       "https://www.googleapis.com/auth/drive.readonly",
       // Limited Drive write access for files created/opened by this app (e.g. new Sheets).
       "https://www.googleapis.com/auth/drive.file",
-      "https://www.googleapis.com/auth/documents.readonly",
+      // Docs read/write (documents.get and documents.batchUpdate).
+      "https://www.googleapis.com/auth/documents",
       // Sheets write access (needed to create spreadsheets + append/update values).
       "https://www.googleapis.com/auth/spreadsheets",
     ],

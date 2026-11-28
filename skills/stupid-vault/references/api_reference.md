@@ -184,6 +184,14 @@ Docs structured read
 - Query params:
   - `fields` (partial response)
 
+Docs edit
+
+- Host: `docs.googleapis.com`
+- Path: `/v1/documents/{documentId}:batchUpdate` (`POST`, JSON `{"requests": [...]}`)
+- `replaceAllText` keeps the replaced text's formatting; pass
+  `writeControl.requiredRevisionId` from the read so the edit fails if the doc changed.
+- Needs the `documents` scope: accounts linked before it was added must reconnect Google.
+
 Sheets read values
 
 - Host: `sheets.googleapis.com`

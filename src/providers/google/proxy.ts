@@ -24,8 +24,9 @@ function interpretGoogle(
   const path = url.pathname;
 
   if (host === "docs.googleapis.com") {
-    const m = path.match(/^\/v1\/documents\/([^/]+)$/);
-    if (m) {
+    // Reads only: `[^/:]` keeps `:batchUpdate` edits from matching.
+    const m = path.match(/^\/v1\/documents\/([^/:]+)$/);
+    if (m && input.method === "GET") {
       const documentId = m[1];
       const fields = firstParam(url, "fields");
       return {
@@ -34,6 +35,26 @@ function interpretGoogle(
           `documentId: ${documentId}`,
           fields ? `fields: ${truncate(fields, 200)}` : "",
         ].filter(Boolean),
+      };
+    }
+
+    const edit = path.match(/^\/v1\/documents\/([^/:]+):batchUpdate$/);
+    if (edit) {
+      const body = input.bodyJson as { requests?: unknown[] } | undefined;
+      const requests = Array.isArray(body?.requests) ? body.requests : [];
+      const kinds = [
+        ...new Set(
+          requests.flatMap((r) =>
+            r && typeof r === "object" ? Object.keys(r) : []
+          )
+        ),
+      ];
+      return {
+        summary: "Edit Google Doc",
+        details: [
+          `documentId: ${edit[1]}`,
+          `${requests.length} edit${requests.length === 1 ? "" : "s"}${kinds.length ? `: ${truncate(kinds.join(", "), 200)}` : ""}`,
+        ],
       };
     }
   }

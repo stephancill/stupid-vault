@@ -211,7 +211,8 @@ Implementation notes:
 ### Milestone 6 - Approval UI (Interpretability + Raw)
 
 - Build a URL recognizer for nicer summaries:
-  - Docs `documents.get`
+  - Docs `documents.get` (GET only) and `documents.batchUpdate` ("Edit Google Doc",
+    with the edit count and request kinds; an edit must never read as a read)
   - Drive v3 file get/list
 - Always show raw host/path and raw query params (truncated)
 - Telegram message includes:
